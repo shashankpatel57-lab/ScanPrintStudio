@@ -17,94 +17,61 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Reconstruct and patch native source
-        shell: pwsh
+      - name: Reconstruct native source
+        shell: powershell
         run: |
           $parts = Get-ChildItem "build\source.b64.part*" | Sort-Object Name
           if ($parts.Count -ne 10) { throw "Expected 10 source bundle parts, found $($parts.Count)." }
-          $b64 = ($parts | ForEach-Object { Get-Content $_.FullName -Raw -Encoding utf8 }) -join ""
+          $b64 = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ""
           $b64 = $b64 -replace "\s", ""
           [IO.File]::WriteAllBytes("source.zip", [Convert]::FromBase64String($b64))
           Expand-Archive -Path "source.zip" -DestinationPath "." -Force
           if (!(Test-Path "src\ScanPrintStudio\ScanPrintStudio.csproj")) { throw "Source reconstruction failed." }
 
-          # Epson/WIA compatibility fixes.
-          # Epson document-scanner WIA drivers are stricter than many HP drivers:
-          # - Pages=0 (ALL_PAGES) can make Automation Transfer return E_INVALIDARG.
-          # - WIA 2 feeder items use FRONT_ONLY/DUPLEX, not the obsolete FEEDER flag.
-          # - Setting standard page size and explicit extents together can create an invalid property combination.
           $scannerPath = "src\ScanPrintStudio\Services\ScannerService.cs"
-          $scanner = Get-Content $scannerPath -Raw -Encoding utf8
+          $scanner = Get-Content $scannerPath -Raw -Encoding UTF8
 
+          # WIA COM item hotfix.
+          $scanner = $scanner.Replace("Convert.ToString(item.Name)", "Convert.ToString(item.ItemID)")
+
+          # WIA 2 feeder-item mode. FRONT_ONLY is the correct single-sided feeder flag.
           $scanner = $scanner.Replace(
             "private const int SelectFrontFirst = 0x008;",
             "private const int SelectFrontFirst = 0x008;" + [Environment]::NewLine + "    private const int SelectFrontOnly = 0x020;"
           )
-
-          $scanner = $scanner.Replace("Convert.ToString(item.Name)", "Convert.ToString(item.ItemID)")
-
           $scanner = $scanner.Replace(
             "TrySetProperty(scanItem.Properties, WiaIpsDocumentHandlingSelect, sourceSelect);",
             "TrySetProperty(scanItem.Properties, WiaIpsDocumentHandlingSelect, options.Source == ScanSource.Adf ? (options.Sides == ScanSides.TwoSided ? SelectDuplex | SelectFrontFirst : SelectFrontOnly) : sourceSelect);"
           )
 
-          $scanner = $scanner.Replace(
-            "TrySetProperty(scanItem.Properties, WiaIpsPages, 0);",
-            "TrySetProperty(scanItem.Properties, WiaIpsPages, 1);"
-          )
-          $scanner = $scanner.Replace(
-            "TrySetProperty(device.Properties, WiaIpsPages, 0);",
-            "TrySetProperty(device.Properties, WiaIpsPages, 1);"
-          )
-
-          $oldPageBlock = @'
-            if (options.PaperSize.WiaPageCode is int code) TrySetProperty(item.Properties, WiaIpsPageSize, code);
-            if (!options.PaperSize.IsAuto)
-            {
-                var (w, h) = options.PaperSize.Pixels(options.Dpi);
-                TrySetProperty(item.Properties, WiaIpsXPos, 0);
-                TrySetProperty(item.Properties, WiaIpsYPos, 0);
-                TrySetProperty(item.Properties, WiaIpsXExtent, w);
-                TrySetProperty(item.Properties, WiaIpsYExtent, h);
-            }
-'@
-          $newPageBlock = @'
-            bool pageSizeSet = false;
-            if (options.PaperSize.WiaPageCode is int code) pageSizeSet = TrySetProperty(item.Properties, WiaIpsPageSize, code);
-            if (!options.PaperSize.IsAuto && !pageSizeSet)
-            {
-                var (w, h) = options.PaperSize.Pixels(options.Dpi);
-                TrySetProperty(item.Properties, WiaIpsXPos, 0);
-                TrySetProperty(item.Properties, WiaIpsYPos, 0);
-                TrySetProperty(item.Properties, WiaIpsXExtent, w);
-                TrySetProperty(item.Properties, WiaIpsYExtent, h);
-            }
-'@
-          $scanner = $scanner.Replace($oldPageBlock, $newPageBlock)
+          # Epson document-scanner WIA drivers can reject ALL_PAGES=0 when the Automation
+          # Transfer API is used page-by-page. Request one image per transfer instead.
+          $scanner = $scanner.Replace("TrySetProperty(scanItem.Properties, WiaIpsPages, 0);", "TrySetProperty(scanItem.Properties, WiaIpsPages, 1);")
+          $scanner = $scanner.Replace("TrySetProperty(device.Properties, WiaIpsPages, 0);", "TrySetProperty(device.Properties, WiaIpsPages, 1);")
 
           if ($scanner -match "item\.Name") { throw "WIA item.Name hotfix was not fully applied." }
-          if ($scanner -match "WiaIpsPages, 0") { throw "ADF Pages=1 compatibility hotfix was not fully applied." }
-          if ($scanner -notmatch "SelectFrontOnly") { throw "WIA 2 FRONT_ONLY hotfix missing." }
-          Set-Content -Path $scannerPath -Value $scanner -Encoding utf8NoBOM
+          if ($scanner -match "WiaIpsPages, 0") { throw "ADF Pages=1 hotfix was not fully applied." }
+          if ($scanner -notmatch "SelectFrontOnly") { throw "WIA FRONT_ONLY hotfix missing." }
+          Set-Content -Path $scannerPath -Value $scanner -Encoding UTF8
 
-          # Build version 1.0.2.
+          # Version corrected native build.
           $projectPath = "src\ScanPrintStudio\ScanPrintStudio.csproj"
-          $project = Get-Content $projectPath -Raw -Encoding utf8
+          $project = Get-Content $projectPath -Raw -Encoding UTF8
           $project = $project.Replace("<Version>1.0.0</Version>", "<Version>1.0.2</Version>")
           $project = $project.Replace("<FileVersion>1.0.0.0</FileVersion>", "<FileVersion>1.0.2.0</FileVersion>")
           $project = $project.Replace("<AssemblyVersion>1.0.0.0</AssemblyVersion>", "<AssemblyVersion>1.0.2.0</AssemblyVersion>")
-          Set-Content -Path $projectPath -Value $project -Encoding utf8NoBOM
+          Set-Content -Path $projectPath -Value $project -Encoding UTF8
 
           $xamlPath = "src\ScanPrintStudio\MainWindow.xaml"
-          $xaml = Get-Content $xamlPath -Raw -Encoding utf8
+          $xaml = Get-Content $xamlPath -Raw -Encoding UTF8
           $xaml = $xaml.Replace("v1.0.0 Native", "v1.0.2 Native")
-          Set-Content -Path $xamlPath -Value $xaml -Encoding utf8NoBOM
+          Set-Content -Path $xamlPath -Value $xaml -Encoding UTF8
 
           $issPath = "Installer\ScanPrintStudio.iss"
-          $iss = Get-Content $issPath -Raw -Encoding utf8
+          $iss = Get-Content $issPath -Raw -Encoding UTF8
           $iss = $iss.Replace('#define MyAppVersion "1.0.0"', '#define MyAppVersion "1.0.2"')
           $iss = $iss.Replace("VersionInfoVersion=1.0.0.0", "VersionInfoVersion=1.0.2.0")
-          Set-Content -Path $issPath -Value $iss -Encoding utf8NoBOM
+          Set-Content -Path $issPath -Value $iss -Encoding UTF8
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -127,15 +94,15 @@ jobs:
           -p:DebugSymbols=false
 
       - name: Install Inno Setup
-        shell: pwsh
+        shell: powershell
         run: choco install innosetup --no-progress -y
 
       - name: Build installer
-        shell: pwsh
+        shell: powershell
         run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "Installer\ScanPrintStudio.iss"'
 
       - name: Verify outputs
-        shell: pwsh
+        shell: powershell
         run: |
           if (!(Test-Path "artifacts\publish\ScanPrintStudio.exe")) { throw "Application executable missing." }
           if (!(Test-Path "artifacts\installer\ScanPrintStudio-Setup-x64.exe")) { throw "Installer executable missing." }
