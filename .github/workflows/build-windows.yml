@@ -55,31 +55,31 @@ jobs:
 
           # Epson document-scanner WIA drivers can reject ALL_PAGES=0 when the Automation
           # Transfer API is used page-by-page. Request one image per transfer instead.
-          $scanner = $scanner.Replace("TrySetProperty(scanItem.Properties, WiaIpsPages, 0);", "TrySetProperty(scanItem.Properties, WiaIpsPages, 1);")
-          $scanner = $scanner.Replace("TrySetProperty(device.Properties, WiaIpsPages, 0);", "TrySetProperty(device.Properties, WiaIpsPages, 1);")
+          $scanner = $scanner.Replace("TrySetProperty(scanItem.Properties, WiaIpsPages, 0);", "TrySetProperty(scanItem.Properties, WiaIpsPages, options.Sides == ScanSides.TwoSided ? 2 : 1);")
+          $scanner = $scanner.Replace("TrySetProperty(device.Properties, WiaIpsPages, 0);", "TrySetProperty(device.Properties, WiaIpsPages, options.Sides == ScanSides.TwoSided ? 2 : 1);")
 
           if ($scanner -match "item\.Name") { throw "WIA item.Name hotfix was not fully applied." }
-          if ($scanner -match "WiaIpsPages, 0") { throw "ADF Pages=1 hotfix was not fully applied." }
+          if ($scanner -match "WiaIpsPages, 0") { throw "ADF pages hotfix was not fully applied." }
           if ($scanner -notmatch "SelectFrontOnly") { throw "WIA FRONT_ONLY hotfix missing." }
           Set-Content -Path $scannerPath -Value $scanner -Encoding UTF8
 
           # Version corrected native build.
           $projectPath = "src\ScanPrintStudio\ScanPrintStudio.csproj"
           $project = Get-Content $projectPath -Raw -Encoding UTF8
-          $project = $project.Replace("<Version>1.0.0</Version>", "<Version>1.0.2</Version>")
-          $project = $project.Replace("<FileVersion>1.0.0.0</FileVersion>", "<FileVersion>1.0.2.0</FileVersion>")
-          $project = $project.Replace("<AssemblyVersion>1.0.0.0</AssemblyVersion>", "<AssemblyVersion>1.0.2.0</AssemblyVersion>")
+          $project = $project.Replace("<Version>1.0.0</Version>", "<Version>1.0.3</Version>")
+          $project = $project.Replace("<FileVersion>1.0.0.0</FileVersion>", "<FileVersion>1.0.3.0</FileVersion>")
+          $project = $project.Replace("<AssemblyVersion>1.0.0.0</AssemblyVersion>", "<AssemblyVersion>1.0.3.0</AssemblyVersion>")
           Set-Content -Path $projectPath -Value $project -Encoding UTF8
 
           $xamlPath = "src\ScanPrintStudio\MainWindow.xaml"
           $xaml = Get-Content $xamlPath -Raw -Encoding UTF8
-          $xaml = $xaml.Replace("v1.0.0 Native", "v1.0.2 Native")
+          $xaml = $xaml.Replace("v1.0.0 Native", "v1.0.3 Native")
           Set-Content -Path $xamlPath -Value $xaml -Encoding UTF8
 
           $issPath = "Installer\ScanPrintStudio.iss"
           $iss = Get-Content $issPath -Raw -Encoding UTF8
-          $iss = $iss.Replace('#define MyAppVersion "1.0.0"', '#define MyAppVersion "1.0.2"')
-          $iss = $iss.Replace("VersionInfoVersion=1.0.0.0", "VersionInfoVersion=1.0.2.0")
+          $iss = $iss.Replace('#define MyAppVersion "1.0.0"', '#define MyAppVersion "1.0.3"')
+          $iss = $iss.Replace("VersionInfoVersion=1.0.0.0", "VersionInfoVersion=1.0.3.0")
           Set-Content -Path $issPath -Value $iss -Encoding UTF8
 
       - name: Setup .NET 8
