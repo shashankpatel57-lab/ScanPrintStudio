@@ -28,6 +28,13 @@ jobs:
           Expand-Archive -Path "source.zip" -DestinationPath "." -Force
           if (!(Test-Path "src\ScanPrintStudio\ScanPrintStudio.csproj")) { throw "Source reconstruction failed." }
 
+          # Build-source hotfixes applied before compilation.
+          $pdf = "src\ScanPrintStudio\Services\PdfService.cs"
+          $pdfText = Get-Content $pdf -Raw
+          if ($pdfText -notmatch "using System.IO;") {
+            Set-Content -Path $pdf -Value ("using System.IO;" + [Environment]::NewLine + $pdfText) -Encoding UTF8
+          }
+
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
