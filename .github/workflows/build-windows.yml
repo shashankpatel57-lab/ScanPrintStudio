@@ -1,0 +1,77 @@
+name: Build Windows Installer
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct native source
+        shell: powershell
+        run: |
+          $parts = Get-ChildItem "build\source.b64.part*" | Sort-Object Name
+          if ($parts.Count -ne 10) { throw "Expected 10 source bundle parts, found $($parts.Count)." }
+          $b64 = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ""
+          $b64 = $b64 -replace "\s", ""
+          [IO.File]::WriteAllBytes("source.zip", [Convert]::FromBase64String($b64))
+          Expand-Archive -Path "source.zip" -DestinationPath "." -Force
+          if (!(Test-Path "src\ScanPrintStudio\ScanPrintStudio.csproj")) { throw "Source reconstruction failed." }
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore src/ScanPrintStudio/ScanPrintStudio.csproj
+
+      - name: Publish Windows application
+        run: >
+          dotnet publish src/ScanPrintStudio/ScanPrintStudio.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -o artifacts/publish
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        shell: powershell
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "Installer\ScanPrintStudio.iss"'
+
+      - name: Verify outputs
+        shell: powershell
+        run: |
+          if (!(Test-Path "artifacts\publish\ScanPrintStudio.exe")) { throw "Application executable missing." }
+          if (!(Test-Path "artifacts\installer\ScanPrintStudio-Setup-x64.exe")) { throw "Installer executable missing." }
+          Get-Item artifacts\publish\ScanPrintStudio.exe
+          Get-Item artifacts\installer\ScanPrintStudio-Setup-x64.exe
+          Get-FileHash artifacts\publish\ScanPrintStudio.exe -Algorithm SHA256
+          Get-FileHash artifacts\installer\ScanPrintStudio-Setup-x64.exe -Algorithm SHA256
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScanPrintStudio-Windows11-Installer
+          path: |
+            artifacts/installer/ScanPrintStudio-Setup-x64.exe
+            artifacts/publish/ScanPrintStudio.exe
+          if-no-files-found: error
+          compression-level: 0
