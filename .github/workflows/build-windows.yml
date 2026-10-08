@@ -29,10 +29,11 @@ jobs:
           if (!(Test-Path "src\ScanPrintStudio\ScanPrintStudio.csproj")) { throw "Source reconstruction failed." }
 
           # Build-source hotfixes applied before compilation.
-          $pdf = "src\ScanPrintStudio\Services\PdfService.cs"
-          $pdfText = Get-Content $pdf -Raw
-          if ($pdfText -notmatch "using System.IO;") {
-            Set-Content -Path $pdf -Value ("using System.IO;" + [Environment]::NewLine + $pdfText) -Encoding UTF8
+          Get-ChildItem "src\ScanPrintStudio" -Filter *.cs -Recurse | ForEach-Object {
+            $text = Get-Content $_.FullName -Raw
+            if ($text -notmatch "using System.IO;") {
+              Set-Content -Path $_.FullName -Value ("using System.IO;" + [Environment]::NewLine + $text) -Encoding UTF8
+            }
           }
 
       - name: Setup .NET 8
