@@ -28,6 +28,15 @@ jobs:
           Expand-Archive -Path "source.zip" -DestinationPath "." -Force
           if (!(Test-Path "src\ScanPrintStudio\ScanPrintStudio.csproj")) { throw "Source reconstruction failed." }
 
+          # The original source bundle relies on explicit System.IO in several files.
+          # Read as UTF-8 so Unicode UI/status text is not corrupted.
+          Get-ChildItem "src\ScanPrintStudio" -Filter *.cs -Recurse | ForEach-Object {
+            $text = Get-Content $_.FullName -Raw -Encoding UTF8
+            if ($text -notmatch "using System.IO;") {
+              Set-Content -Path $_.FullName -Value ("using System.IO;" + [Environment]::NewLine + $text) -Encoding UTF8
+            }
+          }
+
           $scannerPath = "src\ScanPrintStudio\Services\ScannerService.cs"
           $scanner = Get-Content $scannerPath -Raw -Encoding UTF8
 
