@@ -28,13 +28,42 @@ jobs:
           Expand-Archive -Path "source.zip" -DestinationPath "." -Force
           if (!(Test-Path "src\ScanPrintStudio\ScanPrintStudio.csproj")) { throw "Source reconstruction failed." }
 
-          # Build-source hotfixes applied before compilation.
+          # Add System.IO explicitly where needed.
           Get-ChildItem "src\ScanPrintStudio" -Filter *.cs -Recurse | ForEach-Object {
             $text = Get-Content $_.FullName -Raw
             if ($text -notmatch "using System.IO;") {
               Set-Content -Path $_.FullName -Value ("using System.IO;" + [Environment]::NewLine + $text) -Encoding UTF8
             }
           }
+
+          # v1.0.1 WIA hotfix:
+          # WIA Automation Item has ItemID but no Name property. Epson's WIA driver returns
+          # a raw COM object, so dynamic item.Name throws "'System.__ComObject' does not
+          # contain a definition for 'Name'" before scanning begins.
+          $scannerPath = "src\ScanPrintStudio\Services\ScannerService.cs"
+          $scanner = Get-Content $scannerPath -Raw
+          $scanner = $scanner.Replace("Convert.ToString(item.Name)", "Convert.ToString(item.ItemID)")
+          if ($scanner -match "item\.Name") { throw "WIA item.Name hotfix was not fully applied." }
+          Set-Content -Path $scannerPath -Value $scanner -Encoding UTF8
+
+          # Version the corrected native build.
+          $projectPath = "src\ScanPrintStudio\ScanPrintStudio.csproj"
+          $project = Get-Content $projectPath -Raw
+          $project = $project.Replace("<Version>1.0.0</Version>", "<Version>1.0.1</Version>")
+          $project = $project.Replace("<FileVersion>1.0.0.0</FileVersion>", "<FileVersion>1.0.1.0</FileVersion>")
+          $project = $project.Replace("<AssemblyVersion>1.0.0.0</AssemblyVersion>", "<AssemblyVersion>1.0.1.0</AssemblyVersion>")
+          Set-Content -Path $projectPath -Value $project -Encoding UTF8
+
+          $xamlPath = "src\ScanPrintStudio\MainWindow.xaml"
+          $xaml = Get-Content $xamlPath -Raw
+          $xaml = $xaml.Replace("v1.0.0 Native", "v1.0.1 Native")
+          Set-Content -Path $xamlPath -Value $xaml -Encoding UTF8
+
+          $issPath = "Installer\ScanPrintStudio.iss"
+          $iss = Get-Content $issPath -Raw
+          $iss = $iss.Replace('#define MyAppVersion "1.0.0"', '#define MyAppVersion "1.0.1"')
+          $iss = $iss.Replace("VersionInfoVersion=1.0.0.0", "VersionInfoVersion=1.0.1.0")
+          Set-Content -Path $issPath -Value $iss -Encoding UTF8
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
