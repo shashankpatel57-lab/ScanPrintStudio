@@ -63,7 +63,7 @@ jobs:
           if ($scanner -notmatch "SelectFrontOnly") { throw "WIA FRONT_ONLY hotfix missing." }
           Set-Content -Path $scannerPath -Value $scanner -Encoding UTF8
 
-          # v1.0.4: Epson DS-series duplex is routed through Epson's TWAIN/Epson Scan 2 source.
+          # v1.0.5: Epson DS-series duplex is routed through Epson's TWAIN/Epson Scan 2 source.
           # WIA Automation works for single-sided acquisition on these scanners, but some Epson
           # WIA drivers reject duplex acquisition with E_INVALIDARG. NAPS2 provides a robust
           # TWAIN bridge plus a 32-bit worker so our 64-bit app can use Epson's common 32-bit DS.
@@ -136,20 +136,26 @@ jobs:
           # Version corrected native build.
           $projectPath = "src\ScanPrintStudio\ScanPrintStudio.csproj"
           $project = Get-Content $projectPath -Raw -Encoding UTF8
-          $project = $project.Replace("<Version>1.0.0</Version>", "<Version>1.0.4</Version>")
-          $project = $project.Replace("<FileVersion>1.0.0.0</FileVersion>", "<FileVersion>1.0.4.0</FileVersion>")
-          $project = $project.Replace("<AssemblyVersion>1.0.0.0</AssemblyVersion>", "<AssemblyVersion>1.0.4.0</AssemblyVersion>")
+          $project = $project.Replace("<Version>1.0.0</Version>", "<Version>1.0.5</Version>")
+          $project = $project.Replace("<FileVersion>1.0.0.0</FileVersion>", "<FileVersion>1.0.5.0</FileVersion>")
+          $project = $project.Replace("<AssemblyVersion>1.0.0.0</AssemblyVersion>", "<AssemblyVersion>1.0.5.0</AssemblyVersion>")
           Set-Content -Path $projectPath -Value $project -Encoding UTF8
 
           $xamlPath = "src\ScanPrintStudio\MainWindow.xaml"
           $xaml = Get-Content $xamlPath -Raw -Encoding UTF8
-          $xaml = $xaml.Replace("v1.0.0 Native", "v1.0.4 Native")
+          $xaml = $xaml.Replace("v1.0.0 Native", "v1.0.5 Native")
           Set-Content -Path $xamlPath -Value $xaml -Encoding UTF8
 
           $issPath = "Installer\ScanPrintStudio.iss"
           $iss = Get-Content $issPath -Raw -Encoding UTF8
-          $iss = $iss.Replace('#define MyAppVersion "1.0.0"', '#define MyAppVersion "1.0.4"')
-          $iss = $iss.Replace("VersionInfoVersion=1.0.0.0", "VersionInfoVersion=1.0.4.0")
+          $iss = $iss.Replace('#define MyAppVersion "1.0.0"', '#define MyAppVersion "1.0.5"')
+          $iss = $iss.Replace("VersionInfoVersion=1.0.0.0", "VersionInfoVersion=1.0.5.0")
+          if ($iss -notmatch 'NAPS2\.Worker\.exe') {
+            $mainExeSource = ($iss -split "\r?\n" | Where-Object { $_ -match '^Source:.*ScanPrintStudio\.exe' } | Select-Object -First 1)
+            if (!$mainExeSource) { throw "Could not find ScanPrintStudio.exe source line in Inno script." }
+            $workerSource = 'Source: "..\artifacts\publish\NAPS2.Worker.exe"; DestDir: "{app}"; Flags: ignoreversion'
+            $iss = $iss.Replace($mainExeSource, $mainExeSource + [Environment]::NewLine + $workerSource)
+          }
           Set-Content -Path $issPath -Value $iss -Encoding UTF8
 
       - name: Setup .NET 8
@@ -172,6 +178,18 @@ jobs:
           -p:DebugType=None
           -p:DebugSymbols=false
 
+      - name: Add NAPS2 32-bit TWAIN worker
+        shell: powershell
+        run: |
+          $worker = Get-ChildItem "$env:USERPROFILE\.nuget\packages\naps2.sdk.worker.win32" -Filter "NAPS2.Worker.exe" -Recurse -File |
+            Sort-Object FullName |
+            Select-Object -Last 1
+          if (!$worker) { throw "NAPS2.Worker.exe was not found in the restored NAPS2.Sdk.Worker.Win32 package." }
+          Copy-Item $worker.FullName "artifacts\publish\NAPS2.Worker.exe" -Force
+          if (!(Test-Path "artifacts\publish\NAPS2.Worker.exe")) { throw "Failed to copy NAPS2.Worker.exe into publish output." }
+          Get-Item "artifacts\publish\NAPS2.Worker.exe"
+          Get-FileHash "artifacts\publish\NAPS2.Worker.exe" -Algorithm SHA256
+
       - name: Install Inno Setup
         shell: powershell
         run: choco install innosetup --no-progress -y
@@ -184,10 +202,13 @@ jobs:
         shell: powershell
         run: |
           if (!(Test-Path "artifacts\publish\ScanPrintStudio.exe")) { throw "Application executable missing." }
+          if (!(Test-Path "artifacts\publish\NAPS2.Worker.exe")) { throw "NAPS2 32-bit TWAIN worker missing." }
           if (!(Test-Path "artifacts\installer\ScanPrintStudio-Setup-x64.exe")) { throw "Installer executable missing." }
           Get-Item artifacts\publish\ScanPrintStudio.exe
+          Get-Item artifacts\publish\NAPS2.Worker.exe
           Get-Item artifacts\installer\ScanPrintStudio-Setup-x64.exe
           Get-FileHash artifacts\publish\ScanPrintStudio.exe -Algorithm SHA256
+          Get-FileHash artifacts\publish\NAPS2.Worker.exe -Algorithm SHA256
           Get-FileHash artifacts\installer\ScanPrintStudio-Setup-x64.exe -Algorithm SHA256
 
       - name: Upload installer
@@ -197,5 +218,6 @@ jobs:
           path: |
             artifacts/installer/ScanPrintStudio-Setup-x64.exe
             artifacts/publish/ScanPrintStudio.exe
+            artifacts/publish/NAPS2.Worker.exe
           if-no-files-found: error
           compression-level: 0
