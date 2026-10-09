@@ -113,6 +113,11 @@ jobs:
             "src\ScanPrintStudio\Services\EpsonTwainService.cs",
             [Convert]::FromBase64String($epsonServiceB64)
           )
+          $epsonPath = "src\ScanPrintStudio\Services\EpsonTwainService.cs"
+          $epsonText = Get-Content $epsonPath -Raw -Encoding UTF8
+          if ($epsonText -notmatch "using System.IO;") {
+            Set-Content -Path $epsonPath -Value ("using System.IO;" + [Environment]::NewLine + $epsonText) -Encoding UTF8
+          }
 
           $projectPath = "src\ScanPrintStudio\ScanPrintStudio.csproj"
           $project = Get-Content $projectPath -Raw -Encoding UTF8
