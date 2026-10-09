@@ -89,21 +89,21 @@ jobs:
 
           $scanner = Get-Content $scannerPath -Raw -Encoding UTF8
           $oldScanSignature = 'public Task<List<string>> ScanAsync(ScanOptions options, IProgress<string>? progress = null) => RunStaAsync(() =>' + [Environment]::NewLine + '    {'
-          $newScanSignature = @'
-public async Task<List<string>> ScanAsync(ScanOptions options, IProgress<string>? progress = null)
-    {
-        bool isEpson = options.ScannerManufacturer.Contains("EPSON", StringComparison.OrdinalIgnoreCase)
-                       || options.ScannerName.Contains("EPSON", StringComparison.OrdinalIgnoreCase);
-        if (isEpson && options.Source == ScanSource.Adf && options.Sides == ScanSides.TwoSided)
-        {
-            return await EpsonTwainService.ScanAsync(options, progress);
-        }
-        return await ScanWiaAsync(options, progress);
-    }
-
-    private Task<List<string>> ScanWiaAsync(ScanOptions options, IProgress<string>? progress = null) => RunStaAsync(() =>
-    {
-'@
+          $newScanSignature = @(
+            'public async Task<List<string>> ScanAsync(ScanOptions options, IProgress<string>? progress = null)',
+            '    {',
+            '        bool isEpson = options.ScannerManufacturer.Contains("EPSON", StringComparison.OrdinalIgnoreCase)',
+            '                       || options.ScannerName.Contains("EPSON", StringComparison.OrdinalIgnoreCase);',
+            '        if (isEpson && options.Source == ScanSource.Adf && options.Sides == ScanSides.TwoSided)',
+            '        {',
+            '            return await EpsonTwainService.ScanAsync(options, progress);',
+            '        }',
+            '        return await ScanWiaAsync(options, progress);',
+            '    }',
+            '',
+            '    private Task<List<string>> ScanWiaAsync(ScanOptions options, IProgress<string>? progress = null) => RunStaAsync(() =>',
+            '    {'
+          ) -join [Environment]::NewLine
           if (!$scanner.Contains($oldScanSignature)) { throw "Could not patch ScannerService ScanAsync routing." }
           $scanner = $scanner.Replace($oldScanSignature, $newScanSignature.TrimEnd())
           Set-Content -Path $scannerPath -Value $scanner -Encoding UTF8
@@ -117,13 +117,13 @@ public async Task<List<string>> ScanAsync(ScanOptions options, IProgress<string>
           $projectPath = "src\ScanPrintStudio\ScanPrintStudio.csproj"
           $project = Get-Content $projectPath -Raw -Encoding UTF8
           if ($project -notmatch 'NAPS2.Sdk') {
-            $packages = @'
-  <ItemGroup>
-    <PackageReference Include="NAPS2.Sdk" Version="1.4.0" />
-    <PackageReference Include="NAPS2.Images.Gdi" Version="1.4.0" />
-    <PackageReference Include="NAPS2.Sdk.Worker.Win32" Version="1.4.0" />
-  </ItemGroup>
-'@
+            $packages = @(
+              '  <ItemGroup>',
+              '    <PackageReference Include="NAPS2.Sdk" Version="1.4.0" />',
+              '    <PackageReference Include="NAPS2.Images.Gdi" Version="1.4.0" />',
+              '    <PackageReference Include="NAPS2.Sdk.Worker.Win32" Version="1.4.0" />',
+              '  </ItemGroup>'
+            ) -join [Environment]::NewLine
             $project = $project.Replace("</Project>", $packages + [Environment]::NewLine + "</Project>")
           }
           Set-Content -Path $projectPath -Value $project -Encoding UTF8
