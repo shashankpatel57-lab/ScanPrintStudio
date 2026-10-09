@@ -150,12 +150,6 @@ jobs:
           $iss = Get-Content $issPath -Raw -Encoding UTF8
           $iss = $iss.Replace('#define MyAppVersion "1.0.0"', '#define MyAppVersion "1.0.5"')
           $iss = $iss.Replace("VersionInfoVersion=1.0.0.0", "VersionInfoVersion=1.0.5.0")
-          if ($iss -notmatch 'NAPS2\.Worker\.exe') {
-            $mainExeSource = ($iss -split "\r?\n" | Where-Object { $_ -match '^Source:.*ScanPrintStudio\.exe' } | Select-Object -First 1)
-            if (!$mainExeSource) { throw "Could not find ScanPrintStudio.exe source line in Inno script." }
-            $workerSource = 'Source: "..\artifacts\publish\NAPS2.Worker.exe"; DestDir: "{app}"; Flags: ignoreversion'
-            $iss = $iss.Replace($mainExeSource, $mainExeSource + [Environment]::NewLine + $workerSource)
-          }
           Set-Content -Path $issPath -Value $iss -Encoding UTF8
 
       - name: Setup .NET 8
