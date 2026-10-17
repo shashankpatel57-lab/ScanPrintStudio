@@ -1,0 +1,48 @@
+name: Inspect Source
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/inspect-source.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct source
+        shell: powershell
+        run: |
+          $parts = Get-ChildItem "build\source.b64.part*" | Sort-Object Name
+          $b64 = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ""
+          $b64 = $b64 -replace "\s", ""
+          [IO.File]::WriteAllBytes("source.zip", [Convert]::FromBase64String($b64))
+          Expand-Archive -Path "source.zip" -DestinationPath "." -Force
+
+      - name: Collect source files
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force inspect | Out-Null
+          $wanted = @(
+            "src\ScanPrintStudio\Models\Models.cs",
+            "src\ScanPrintStudio\MainWindow.xaml.cs",
+            "src\ScanPrintStudio\MainWindow.xaml",
+            "src\ScanPrintStudio\Services\ScannerService.cs",
+            "src\ScanPrintStudio\Services\SettingsService.cs",
+            "src\ScanPrintStudio\Helpers\ImageProcessing.cs"
+          )
+          foreach ($file in $wanted) {
+            if (Test-Path $file) { Copy-Item $file inspect -Force }
+          }
+          Get-ChildItem inspect
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ScanPrintStudio-source-inspect
+          path: inspect/*
+          if-no-files-found: error
