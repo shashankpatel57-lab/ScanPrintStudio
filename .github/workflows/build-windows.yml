@@ -63,7 +63,7 @@ jobs:
           if ($scanner -notmatch "SelectFrontOnly") { throw "WIA FRONT_ONLY hotfix missing." }
           Set-Content -Path $scannerPath -Value $scanner -Encoding UTF8
 
-          # v1.0.5: Epson DS-series duplex is routed through Epson's TWAIN/Epson Scan 2 source.
+          # v1.0.6: Epson DS-series duplex is routed through Epson's TWAIN/Epson Scan 2 source.
           # WIA Automation works for single-sided acquisition on these scanners, but some Epson
           # WIA drivers reject duplex acquisition with E_INVALIDARG. NAPS2 provides a robust
           # TWAIN bridge plus a 32-bit worker so our 64-bit app can use Epson's common 32-bit DS.
@@ -94,7 +94,7 @@ jobs:
             '    {',
             '        bool isEpson = options.ScannerManufacturer.Contains("EPSON", StringComparison.OrdinalIgnoreCase)',
             '                       || options.ScannerName.Contains("EPSON", StringComparison.OrdinalIgnoreCase);',
-            '        if (isEpson && options.Source == ScanSource.Adf && options.Sides == ScanSides.TwoSided)',
+            '        if (isEpson && options.Source == ScanSource.Adf)',
             '        {',
             '            return await EpsonTwainService.ScanAsync(options, progress);',
             '        }',
@@ -115,6 +115,22 @@ jobs:
           )
           $epsonPath = "src\ScanPrintStudio\Services\EpsonTwainService.cs"
           $epsonText = Get-Content $epsonPath -Raw -Encoding UTF8
+          $epsonText = $epsonText.Replace(
+            'PaperSource = PaperSource.Duplex,',
+            'PaperSource = options.Sides == ScanSides.TwoSided ? PaperSource.Duplex : PaperSource.Feeder,'
+          )
+          $epsonText = $epsonText.Replace(
+            'MaxQuality = true,',
+            'MaxQuality = false,' + [Environment]::NewLine + '            Quality = 92,'
+          )
+          $epsonText = $epsonText.Replace(
+            '$"twain-raw-{++page:000}.png"',
+            '$"twain-raw-{++page:000}.bmp"'
+          )
+          $epsonText = $epsonText.Replace(
+            'progress?.Report("Scanning both sides from Epson ADF...");',
+            'progress?.Report(options.Sides == ScanSides.TwoSided ? "Scanning both sides continuously from Epson ADF..." : "Scanning pages continuously from Epson ADF...");'
+          )
           if ($epsonText -notmatch "using System.IO;") {
             Set-Content -Path $epsonPath -Value ("using System.IO;" + [Environment]::NewLine + $epsonText) -Encoding UTF8
           }
@@ -133,42 +149,194 @@ jobs:
           }
           Set-Content -Path $projectPath -Value $project -Encoding UTF8
 
+
+          # v1.0.6: persistent image defaults, one-scan manual naming, and safer blank-page detection.
+          $models = Get-Content $modelsPath -Raw -Encoding UTF8
+          $models = $models.Replace(
+            '    public string? DefaultPrinterName { get; set; }',
+            '    public string? DefaultPrinterName { get; set; }' + [Environment]::NewLine +
+            '    public int DefaultBrightness { get; set; }' + [Environment]::NewLine +
+            '    public int DefaultContrast { get; set; }' + [Environment]::NewLine +
+            '    public double DefaultGamma { get; set; } = 1.0;' + [Environment]::NewLine +
+            '    public string DefaultTextEnhancement { get; set; } = "Off";' + [Environment]::NewLine +
+            '    public bool DefaultSkipBlankPages { get; set; } = true;' + [Environment]::NewLine +
+            '    public string DefaultBlankDetection { get; set; } = "Conservative";'
+          )
+          Set-Content -Path $modelsPath -Value $models -Encoding UTF8
+
+          $xamlPath = "src\ScanPrintStudio\MainWindow.xaml"
+          $xaml = Get-Content $xamlPath -Raw -Encoding UTF8
+          $copyBlankLine = '                                                <CheckBox x:Name="CopySkipBlank" Content="Skip blank pages" IsChecked="True"/>'
+          $xaml = $xaml.Replace(
+            $copyBlankLine,
+            $copyBlankLine + [Environment]::NewLine +
+            '                                                <TextBlock Text="Blank page detection" Margin="0,8,0,0"/>' + [Environment]::NewLine +
+            '                                                <ComboBox x:Name="CopyBlankModeCombo" Margin="0,4,0,8"/>' + [Environment]::NewLine +
+            '                                                <Button Content="SAVE IMAGE SETTINGS AS DEFAULT" Tag="Copy" Click="SaveImageSettings_Click" HorizontalAlignment="Left" Padding="10,6"/>'
+          )
+          $scanBlankLine = '                                                <CheckBox x:Name="ScanSkipBlank" Content="Skip blank pages" IsChecked="True"/>'
+          $xaml = $xaml.Replace(
+            $scanBlankLine,
+            $scanBlankLine + [Environment]::NewLine +
+            '                                                <TextBlock Text="Blank page detection" Margin="0,8,0,0"/>' + [Environment]::NewLine +
+            '                                                <ComboBox x:Name="ScanBlankModeCombo" Margin="0,4,0,8"/>' + [Environment]::NewLine +
+            '                                                <Button Content="SAVE IMAGE SETTINGS AS DEFAULT" Tag="Scan" Click="SaveImageSettings_Click" HorizontalAlignment="Left" Padding="10,6"/>'
+          )
+          $xaml = $xaml.Replace(
+            '                                                <ComboBox x:Name="ScanNameOptionCombo" Visibility="Collapsed" Margin="0,4,0,10"/>',
+            '                                                <ComboBox x:Name="ScanNameOptionCombo" SelectionChanged="ScanNameOptionCombo_SelectionChanged" Visibility="Collapsed" Margin="0,4,0,10"/>'
+          )
+          $manualLine = '                                                <TextBox x:Name="ScanManualNameText" Margin="0,4,0,10"/>'
+          $xaml = $xaml.Replace(
+            $manualLine,
+            '                                                <TextBox x:Name="ScanManualNameText" TextChanged="ScanManualNameText_TextChanged" Margin="0,4,0,10"/>' + [Environment]::NewLine +
+            '                                                <TextBlock Text="Manual file name override (optional - this scan only)"/>' + [Environment]::NewLine +
+            '                                                <TextBox x:Name="ScanOverrideNameText" TextChanged="ScanOverrideNameText_TextChanged" ToolTip="Leave blank to use the selected filing profile name." Margin="0,4,0,10"/>'
+          )
+          Set-Content -Path $xamlPath -Value $xaml -Encoding UTF8
+
+          $main = Get-Content $mainPath -Raw -Encoding UTF8
+          $main = $main.Replace(
+            '        CopyTextEnhancement.SelectedIndex = ScanTextEnhancement.SelectedIndex = 0;',
+            '        CopyTextEnhancement.SelectedIndex = ScanTextEnhancement.SelectedIndex = 0;' + [Environment]::NewLine +
+            '        CopyBlankModeCombo.ItemsSource = ScanBlankModeCombo.ItemsSource = new[] { "Conservative", "Normal", "Aggressive" };' + [Environment]::NewLine +
+            '        ApplySavedImageSettings();'
+          )
+
+          $helperLines = @(
+            '    private void ApplySavedImageSettings()',
+            '    {',
+            '        var settings = _settingsService.Settings;',
+            '        CopyBrightness.Value = ScanBrightness.Value = Math.Clamp(settings.DefaultBrightness, -100, 100);',
+            '        CopyContrast.Value = ScanContrast.Value = Math.Clamp(settings.DefaultContrast, -100, 100);',
+            '        CopyGamma.Value = ScanGamma.Value = Math.Clamp(settings.DefaultGamma, 0.5, 2.0);',
+            '        CopyTextEnhancement.SelectedItem = ScanTextEnhancement.SelectedItem = settings.DefaultTextEnhancement;',
+            '        if (CopyTextEnhancement.SelectedItem is null)',
+            '            CopyTextEnhancement.SelectedIndex = ScanTextEnhancement.SelectedIndex = 0;',
+            '        CopySkipBlank.IsChecked = ScanSkipBlank.IsChecked = settings.DefaultSkipBlankPages;',
+            '        CopyBlankModeCombo.SelectedItem = ScanBlankModeCombo.SelectedItem = settings.DefaultBlankDetection;',
+            '        if (CopyBlankModeCombo.SelectedItem is null)',
+            '            CopyBlankModeCombo.SelectedIndex = ScanBlankModeCombo.SelectedIndex = 0;',
+            '    }',
+            '',
+            '    private void SaveImageSettings_Click(object sender, RoutedEventArgs e)',
+            '    {',
+            '        bool copy = sender is Button button && string.Equals(Convert.ToString(button.Tag), "Copy", StringComparison.OrdinalIgnoreCase);',
+            '        var brightness = copy ? CopyBrightness : ScanBrightness;',
+            '        var contrast = copy ? CopyContrast : ScanContrast;',
+            '        var gamma = copy ? CopyGamma : ScanGamma;',
+            '        var textEnhancement = copy ? CopyTextEnhancement : ScanTextEnhancement;',
+            '        var skipBlank = copy ? CopySkipBlank : ScanSkipBlank;',
+            '        var blankMode = copy ? CopyBlankModeCombo : ScanBlankModeCombo;',
+            '',
+            '        var settings = _settingsService.Settings;',
+            '        settings.DefaultBrightness = (int)Math.Round(brightness.Value);',
+            '        settings.DefaultContrast = (int)Math.Round(contrast.Value);',
+            '        settings.DefaultGamma = gamma.Value;',
+            '        settings.DefaultTextEnhancement = Convert.ToString(textEnhancement.SelectedItem) ?? "Off";',
+            '        settings.DefaultSkipBlankPages = skipBlank.IsChecked == true;',
+            '        settings.DefaultBlankDetection = Convert.ToString(blankMode.SelectedItem) ?? "Conservative";',
+            '        _settingsService.Save();',
+            '        ApplySavedImageSettings();',
+            '        StatusText.Text = "Image enhancement settings saved as default";',
+            '    }',
+            ''
+          ) -join [Environment]::NewLine
+          $main = $main.Replace(
+            '    private async Task RefreshDevicesAsync()',
+            $helperLines + [Environment]::NewLine + '    private async Task RefreshDevicesAsync()'
+          )
+
+          $main = $main.Replace(
+            '        var skipBlank = copy ? CopySkipBlank : ScanSkipBlank;',
+            '        var skipBlank = copy ? CopySkipBlank : ScanSkipBlank;' + [Environment]::NewLine +
+            '        var blankMode = copy ? CopyBlankModeCombo : ScanBlankModeCombo;'
+          )
+          $main = $main.Replace(
+            '            BlankSensitivity = 0.995',
+            '            BlankSensitivity = Convert.ToString(blankMode.SelectedItem) switch' + [Environment]::NewLine +
+            '            {' + [Environment]::NewLine +
+            '                "Aggressive" => 0.9975,' + [Environment]::NewLine +
+            '                "Normal" => 0.9990,' + [Environment]::NewLine +
+            '                _ => 0.9997' + [Environment]::NewLine +
+            '            }'
+          )
+
+          $oldIncrement = @(
+            '            if (profile.NamingMode == NamingMode.Incremental)',
+            '            {',
+            '                profile.NextNumber++;',
+            '                _settingsService.Save();',
+            '                ScanProfileCombo_SelectionChanged(null!, null!);',
+            '            }'
+          ) -join [Environment]::NewLine
+          $newIncrement = @(
+            '            bool usedManualOverride = !string.IsNullOrWhiteSpace(ScanOverrideNameText.Text);',
+            '            if (profile.NamingMode == NamingMode.Incremental && !usedManualOverride)',
+            '            {',
+            '                profile.NextNumber++;',
+            '                _settingsService.Save();',
+            '                ScanProfileCombo_SelectionChanged(null!, null!);',
+            '            }',
+            '            if (usedManualOverride)',
+            '            {',
+            '                ScanOverrideNameText.Clear();',
+            '                UpdateScanFilenamePreview();',
+            '            }'
+          ) -join [Environment]::NewLine
+          $main = $main.Replace($oldIncrement, $newIncrement)
+
+          $main = $main.Replace(
+            '    private string BuildBaseName(FilingProfile profile)' + [Environment]::NewLine + '    {' + [Environment]::NewLine + '        return profile.NamingMode switch',
+            '    private string BuildBaseName(FilingProfile profile)' + [Environment]::NewLine + '    {' + [Environment]::NewLine +
+            '        string manualOverride = ScanOverrideNameText.Text.Trim();' + [Environment]::NewLine +
+            '        if (!string.IsNullOrWhiteSpace(manualOverride)) return manualOverride;' + [Environment]::NewLine + [Environment]::NewLine +
+            '        return profile.NamingMode switch'
+          )
+
+          $previewOld = '        ScanFilenamePreview.Text = $"Preview: {BuildBaseName(profile)}";' + [Environment]::NewLine + '    }' + [Environment]::NewLine + [Environment]::NewLine + '    private void BrowseScanFolder_Click'
+          $previewNew = @(
+            '        UpdateScanFilenamePreview();',
+            '    }',
+            '',
+            '    private void UpdateScanFilenamePreview()',
+            '    {',
+            '        if (ScanProfileCombo.SelectedItem is FilingProfile profile)',
+            '            ScanFilenamePreview.Text = $"Preview: {BuildBaseName(profile)}";',
+            '    }',
+            '',
+            '    private void ScanOverrideNameText_TextChanged(object sender, TextChangedEventArgs e) => UpdateScanFilenamePreview();',
+            '    private void ScanManualNameText_TextChanged(object sender, TextChangedEventArgs e) => UpdateScanFilenamePreview();',
+            '    private void ScanNameOptionCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateScanFilenamePreview();',
+            '',
+            '    private void BrowseScanFolder_Click'
+          ) -join [Environment]::NewLine
+          $main = $main.Replace($previewOld, $previewNew)
+          Set-Content -Path $mainPath -Value $main -Encoding UTF8
+
+          [IO.File]::WriteAllBytes(
+            "src\ScanPrintStudio\Helpers\ImageProcessing.cs",
+            [Convert]::FromBase64String('dXNpbmcgU3lzdGVtLldpbmRvd3M7CnVzaW5nIFN5c3RlbS5XaW5kb3dzLk1lZGlhOwp1c2luZyBTeXN0ZW0uV2luZG93cy5NZWRpYS5JbWFnaW5nOwp1c2luZyBTY2FuUHJpbnRTdHVkaW8uTW9kZWxzOwoKbmFtZXNwYWNlIFNjYW5QcmludFN0dWRpby5IZWxwZXJzOwoKcHVibGljIHN0YXRpYyBjbGFzcyBJbWFnZVByb2Nlc3NpbmcKewogICAgcHVibGljIHN0YXRpYyBCaXRtYXBTb3VyY2UgTG9hZEJpdG1hcChzdHJpbmcgcGF0aCkKICAgIHsKICAgICAgICB1c2luZyB2YXIgZnMgPSBGaWxlLk9wZW5SZWFkKHBhdGgpOwogICAgICAgIHZhciBkZWNvZGVyID0gQml0bWFwRGVjb2Rlci5DcmVhdGUoZnMsIEJpdG1hcENyZWF0ZU9wdGlvbnMuUHJlc2VydmVQaXhlbEZvcm1hdCwgQml0bWFwQ2FjaGVPcHRpb24uT25Mb2FkKTsKICAgICAgICB2YXIgZnJhbWUgPSBkZWNvZGVyLkZyYW1lc1swXTsKICAgICAgICBmcmFtZS5GcmVlemUoKTsKICAgICAgICByZXR1cm4gZnJhbWU7CiAgICB9CgogICAgcHVibGljIHN0YXRpYyBzdHJpbmcgUHJvY2Vzc1RvSnBlZyhzdHJpbmcgc291cmNlUGF0aCwgU2Nhbk9wdGlvbnMgb3B0aW9ucywgc3RyaW5nIG91dHB1dFBhdGgpCiAgICB7CiAgICAgICAgQml0bWFwU291cmNlIHNyYyA9IExvYWRCaXRtYXAoc291cmNlUGF0aCk7CgogICAgICAgIGlmICghb3B0aW9ucy5QYXBlclNpemUuSXNGdWxsQmVkICYmICFvcHRpb25zLlBhcGVyU2l6ZS5Jc0F1dG8pCiAgICAgICAgewogICAgICAgICAgICB2YXIgKHRhcmdldFcsIHRhcmdldEgpID0gb3B0aW9ucy5QYXBlclNpemUuUGl4ZWxzKG9wdGlvbnMuRHBpKTsKICAgICAgICAgICAgaWYgKHRhcmdldFcgPiAwICYmIHRhcmdldEggPiAwKQogICAgICAgICAgICB7CiAgICAgICAgICAgICAgICBpZiAoc3JjLlBpeGVsV2lkdGggPj0gdGFyZ2V0VyAmJiBzcmMuUGl4ZWxIZWlnaHQgPj0gdGFyZ2V0SCkKICAgICAgICAgICAgICAgIHsKICAgICAgICAgICAgICAgICAgICBzcmMgPSBuZXcgQ3JvcHBlZEJpdG1hcChzcmMsIG5ldyBJbnQzMlJlY3QoMCwgMCwgdGFyZ2V0VywgdGFyZ2V0SCkpOwogICAgICAgICAgICAgICAgfQogICAgICAgICAgICAgICAgZWxzZSBpZiAoc3JjLlBpeGVsV2lkdGggIT0gdGFyZ2V0VyB8fCBzcmMuUGl4ZWxIZWlnaHQgIT0gdGFyZ2V0SCkKICAgICAgICAgICAgICAgIHsKICAgICAgICAgICAgICAgICAgICB2YXIgc2NhbGVYID0gKGRvdWJsZSl0YXJnZXRXIC8gc3JjLlBpeGVsV2lkdGg7CiAgICAgICAgICAgICAgICAgICAgdmFyIHNjYWxlWSA9IChkb3VibGUpdGFyZ2V0SCAvIHNyYy5QaXhlbEhlaWdodDsKICAgICAgICAgICAgICAgICAgICB2YXIgdGIgPSBuZXcgVHJhbnNmb3JtZWRCaXRtYXAoc3JjLCBuZXcgU2NhbGVUcmFuc2Zvcm0oc2NhbGVYLCBzY2FsZVkpKTsKICAgICAgICAgICAgICAgICAgICB0Yi5GcmVlemUoKTsKICAgICAgICAgICAgICAgICAgICBzcmMgPSB0YjsKICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgfQogICAgICAgIH0KCiAgICAgICAgdmFyIGNvbnZlcnRlZCA9IG5ldyBGb3JtYXRDb252ZXJ0ZWRCaXRtYXAoc3JjLCBQaXhlbEZvcm1hdHMuQmdyYTMyLCBudWxsLCAwKTsKICAgICAgICBjb252ZXJ0ZWQuRnJlZXplKCk7CiAgICAgICAgdmFyIHN0cmlkZSA9IGNvbnZlcnRlZC5QaXhlbFdpZHRoICogNDsKICAgICAgICB2YXIgcGl4ZWxzID0gbmV3IGJ5dGVbc3RyaWRlICogY29udmVydGVkLlBpeGVsSGVpZ2h0XTsKICAgICAgICBjb252ZXJ0ZWQuQ29weVBpeGVscyhwaXhlbHMsIHN0cmlkZSwgMCk7CgogICAgICAgIHZhciBicmlnaHRuZXNzID0gTWF0aC5DbGFtcChvcHRpb25zLkJyaWdodG5lc3MsIC0xMDAsIDEwMCkgKiAyLjA7CiAgICAgICAgdmFyIGNvbnRyYXN0ID0gTWF0aC5DbGFtcChvcHRpb25zLkNvbnRyYXN0LCAtMTAwLCAxMDApOwogICAgICAgIHZhciBjb250cmFzdEZhY3RvciA9ICgyNTkuMCAqIChjb250cmFzdCArIDI1NS4wKSkgLyAoMjU1LjAgKiAoMjU5LjAgLSBjb250cmFzdCkpOwogICAgICAgIHZhciBpbnZHYW1tYSA9IDEuMCAvIE1hdGguQ2xhbXAob3B0aW9ucy5HYW1tYSwgMC4zLCAzLjApOwogICAgICAgIGJvb2wgdGV4dExpZ2h0ID0gb3B0aW9ucy5UZXh0RW5oYW5jZW1lbnQuRXF1YWxzKCJMaWdodCIsIFN0cmluZ0NvbXBhcmlzb24uT3JkaW5hbElnbm9yZUNhc2UpOwogICAgICAgIGJvb2wgdGV4dFN0cm9uZyA9IG9wdGlvbnMuVGV4dEVuaGFuY2VtZW50LkVxdWFscygiU3Ryb25nIiwgU3RyaW5nQ29tcGFyaXNvbi5PcmRpbmFsSWdub3JlQ2FzZSk7CiAgICAgICAgaWYgKHRleHRMaWdodCkgY29udHJhc3RGYWN0b3IgKj0gMS4xODsKICAgICAgICBpZiAodGV4dFN0cm9uZykgY29udHJhc3RGYWN0b3IgKj0gMS4zNTsKCiAgICAgICAgZm9yIChpbnQgaSA9IDA7IGkgPCBwaXhlbHMuTGVuZ3RoOyBpICs9IDQpCiAgICAgICAgewogICAgICAgICAgICBkb3VibGUgYiA9IHBpeGVsc1tpXSwgZyA9IHBpeGVsc1tpICsgMV0sIHIgPSBwaXhlbHNbaSArIDJdOwoKICAgICAgICAgICAgaWYgKG9wdGlvbnMuQ29sb3JNb2RlID09IFNjYW5Db2xvck1vZGUuR3JheXNjYWxlIHx8IG9wdGlvbnMuQ29sb3JNb2RlID09IFNjYW5Db2xvck1vZGUuVGV4dCB8fCB0ZXh0TGlnaHQgfHwgdGV4dFN0cm9uZykKICAgICAgICAgICAgewogICAgICAgICAgICAgICAgdmFyIGdyYXkgPSAwLjExNCAqIGIgKyAwLjU4NyAqIGcgKyAwLjI5OSAqIHI7CiAgICAgICAgICAgICAgICBiID0gZyA9IHIgPSBncmF5OwogICAgICAgICAgICB9CgogICAgICAgICAgICBpZiAodGV4dFN0cm9uZykKICAgICAgICAgICAgewogICAgICAgICAgICAgICAgdmFyIGdyYXkgPSByOwogICAgICAgICAgICAgICAgdmFyIHRocmVzaG9sZCA9IDE4Mi4wOwogICAgICAgICAgICAgICAgciA9IGcgPSBiID0gZ3JheSA+PSB0aHJlc2hvbGQgPyAyNTUgOiBNYXRoLk1heCgwLCBncmF5ICogMC42OCk7CiAgICAgICAgICAgIH0KCiAgICAgICAgICAgIHIgPSBBcHBseShyLCBicmlnaHRuZXNzLCBjb250cmFzdEZhY3RvciwgaW52R2FtbWEpOwogICAgICAgICAgICBnID0gQXBwbHkoZywgYnJpZ2h0bmVzcywgY29udHJhc3RGYWN0b3IsIGludkdhbW1hKTsKICAgICAgICAgICAgYiA9IEFwcGx5KGIsIGJyaWdodG5lc3MsIGNvbnRyYXN0RmFjdG9yLCBpbnZHYW1tYSk7CgogICAgICAgICAgICBpZiAob3B0aW9ucy5Db2xvck1vZGUgPT0gU2NhbkNvbG9yTW9kZS5UZXh0KQogICAgICAgICAgICB7CiAgICAgICAgICAgICAgICB2YXIgZ3JheSA9IChyICsgZyArIGIpIC8gMy4wOwogICAgICAgICAgICAgICAgciA9IGcgPSBiID0gZ3JheSA+PSAxODAgPyAyNTUgOiAwOwogICAgICAgICAgICB9CgogICAgICAgICAgICBwaXhlbHNbaV0gPSAoYnl0ZSliOwogICAgICAgICAgICBwaXhlbHNbaSArIDFdID0gKGJ5dGUpZzsKICAgICAgICAgICAgcGl4ZWxzW2kgKyAyXSA9IChieXRlKXI7CiAgICAgICAgICAgIHBpeGVsc1tpICsgM10gPSAyNTU7CiAgICAgICAgfQoKICAgICAgICB2YXIgd2IgPSBuZXcgV3JpdGVhYmxlQml0bWFwKGNvbnZlcnRlZC5QaXhlbFdpZHRoLCBjb252ZXJ0ZWQuUGl4ZWxIZWlnaHQsCiAgICAgICAgICAgIG9wdGlvbnMuRHBpLCBvcHRpb25zLkRwaSwgUGl4ZWxGb3JtYXRzLkJncmEzMiwgbnVsbCk7CiAgICAgICAgd2IuV3JpdGVQaXhlbHMobmV3IEludDMyUmVjdCgwLCAwLCB3Yi5QaXhlbFdpZHRoLCB3Yi5QaXhlbEhlaWdodCksIHBpeGVscywgc3RyaWRlLCAwKTsKICAgICAgICB3Yi5GcmVlemUoKTsKCiAgICAgICAgRGlyZWN0b3J5LkNyZWF0ZURpcmVjdG9yeShQYXRoLkdldERpcmVjdG9yeU5hbWUob3V0cHV0UGF0aCkhKTsKICAgICAgICB1c2luZyB2YXIgb3V0RnMgPSBGaWxlLkNyZWF0ZShvdXRwdXRQYXRoKTsKICAgICAgICB2YXIgZW5jID0gbmV3IEpwZWdCaXRtYXBFbmNvZGVyIHsgUXVhbGl0eUxldmVsID0gOTIgfTsKICAgICAgICBlbmMuRnJhbWVzLkFkZChCaXRtYXBGcmFtZS5DcmVhdGUod2IpKTsKICAgICAgICBlbmMuU2F2ZShvdXRGcyk7CiAgICAgICAgcmV0dXJuIG91dHB1dFBhdGg7CiAgICB9CgogICAgcHJpdmF0ZSBzdGF0aWMgZG91YmxlIEFwcGx5KGRvdWJsZSB2YWx1ZSwgZG91YmxlIGJyaWdodG5lc3MsIGRvdWJsZSBjb250cmFzdEZhY3RvciwgZG91YmxlIGludkdhbW1hKQogICAgewogICAgICAgIHZhciB2ID0gY29udHJhc3RGYWN0b3IgKiAodmFsdWUgLSAxMjgpICsgMTI4ICsgYnJpZ2h0bmVzczsKICAgICAgICB2ID0gTWF0aC5DbGFtcCh2LCAwLCAyNTUpIC8gMjU1LjA7CiAgICAgICAgdiA9IE1hdGguUG93KHYsIGludkdhbW1hKSAqIDI1NS4wOwogICAgICAgIHJldHVybiBNYXRoLkNsYW1wKHYsIDAsIDI1NSk7CiAgICB9CgogICAgcHVibGljIHN0YXRpYyBib29sIElzQmxhbmsoc3RyaW5nIHBhdGgsIGRvdWJsZSB3aGl0ZW5lc3NUaHJlc2hvbGQpCiAgICB7CiAgICAgICAgdmFyIHNyYyA9IExvYWRCaXRtYXAocGF0aCk7CiAgICAgICAgdmFyIHNjYWxlID0gTWF0aC5NaW4oMS4wLCA2NTAuMCAvIE1hdGguTWF4KHNyYy5QaXhlbFdpZHRoLCBzcmMuUGl4ZWxIZWlnaHQpKTsKICAgICAgICBpZiAoc2NhbGUgPCAxLjApCiAgICAgICAgewogICAgICAgICAgICB2YXIgdGIgPSBuZXcgVHJhbnNmb3JtZWRCaXRtYXAoc3JjLCBuZXcgU2NhbGVUcmFuc2Zvcm0oc2NhbGUsIHNjYWxlKSk7CiAgICAgICAgICAgIHRiLkZyZWV6ZSgpOwogICAgICAgICAgICBzcmMgPSB0YjsKICAgICAgICB9CgogICAgICAgIHZhciBjb252ID0gbmV3IEZvcm1hdENvbnZlcnRlZEJpdG1hcChzcmMsIFBpeGVsRm9ybWF0cy5CZ3IyNCwgbnVsbCwgMCk7CiAgICAgICAgY29udi5GcmVlemUoKTsKICAgICAgICBpbnQgd2lkdGggPSBjb252LlBpeGVsV2lkdGg7CiAgICAgICAgaW50IGhlaWdodCA9IGNvbnYuUGl4ZWxIZWlnaHQ7CiAgICAgICAgaW50IHN0cmlkZSA9IHdpZHRoICogMzsKICAgICAgICB2YXIgcGl4ZWxzID0gbmV3IGJ5dGVbc3RyaWRlICogaGVpZ2h0XTsKICAgICAgICBjb252LkNvcHlQaXhlbHMocGl4ZWxzLCBzdHJpZGUsIDApOwoKICAgICAgICBpbnQgbWFyZ2luWCA9IE1hdGguTWF4KDIsIHdpZHRoIC8gNTApOwogICAgICAgIGludCBtYXJnaW5ZID0gTWF0aC5NYXgoMiwgaGVpZ2h0IC8gNTApOwogICAgICAgIGludFtdIGhpc3RvZ3JhbSA9IG5ldyBpbnRbMjU2XTsKICAgICAgICBsb25nIHRvdGFsID0gMDsKCiAgICAgICAgZm9yIChpbnQgeSA9IG1hcmdpblk7IHkgPCBoZWlnaHQgLSBtYXJnaW5ZOyB5KyspCiAgICAgICAgewogICAgICAgICAgICBmb3IgKGludCB4ID0gbWFyZ2luWDsgeCA8IHdpZHRoIC0gbWFyZ2luWDsgeCsrKQogICAgICAgICAgICB7CiAgICAgICAgICAgICAgICBpbnQgaSA9IHkgKiBzdHJpZGUgKyB4ICogMzsKICAgICAgICAgICAgICAgIGludCBsdW1hID0gKGludClNYXRoLlJvdW5kKDAuMTE0ICogcGl4ZWxzW2ldICsgMC41ODcgKiBwaXhlbHNbaSArIDFdICsgMC4yOTkgKiBwaXhlbHNbaSArIDJdKTsKICAgICAgICAgICAgICAgIGhpc3RvZ3JhbVtNYXRoLkNsYW1wKGx1bWEsIDAsIDI1NSldKys7CiAgICAgICAgICAgICAgICB0b3RhbCsrOwogICAgICAgICAgICB9CiAgICAgICAgfQoKICAgICAgICBpZiAodG90YWwgPT0gMCkgcmV0dXJuIHRydWU7CgogICAgICAgIC8vIEVzdGltYXRlIHRoZSBwYXBlciBiYWNrZ3JvdW5kIGZyb20gdGhlIDkwdGgtcGVyY2VudGlsZSBsdW1pbmFuY2UgaW5zdGVhZCBvZgogICAgICAgIC8vIGFzc3VtaW5nIHBlcmZlY3RseSB3aGl0ZSBwYXBlci4gVGhpcyBoYW5kbGVzIG9mZi13aGl0ZSBwYXBlciBhbmQgc2Nhbm5lciBzaGFkaW5nLgogICAgICAgIGxvbmcgdGFyZ2V0ID0gKGxvbmcpTWF0aC5DZWlsaW5nKHRvdGFsICogMC45MCk7CiAgICAgICAgbG9uZyBjdW11bGF0aXZlID0gMDsKICAgICAgICBpbnQgYmFja2dyb3VuZCA9IDI1NTsKICAgICAgICBmb3IgKGludCBsZXZlbCA9IDA7IGxldmVsIDw9IDI1NTsgbGV2ZWwrKykKICAgICAgICB7CiAgICAgICAgICAgIGN1bXVsYXRpdmUgKz0gaGlzdG9ncmFtW2xldmVsXTsKICAgICAgICAgICAgaWYgKGN1bXVsYXRpdmUgPj0gdGFyZ2V0KQogICAgICAgICAgICB7CiAgICAgICAgICAgICAgICBiYWNrZ3JvdW5kID0gbGV2ZWw7CiAgICAgICAgICAgICAgICBicmVhazsKICAgICAgICAgICAgfQogICAgICAgIH0KCiAgICAgICAgbG9uZyBzb2Z0SW5rID0gMDsKICAgICAgICBsb25nIGluayA9IDA7CiAgICAgICAgbG9uZyBzdHJvbmdJbmsgPSAwOwogICAgICAgIGludCB0ZXh0Um93cyA9IDA7CiAgICAgICAgaW50IHN0cm9uZ1Jvd3MgPSAwOwoKICAgICAgICBmb3IgKGludCB5ID0gbWFyZ2luWTsgeSA8IGhlaWdodCAtIG1hcmdpblk7IHkrKykKICAgICAgICB7CiAgICAgICAgICAgIGludCByb3dJbmsgPSAwOwogICAgICAgICAgICBpbnQgcm93U3Ryb25nID0gMDsKICAgICAgICAgICAgaW50IHJvd1NhbXBsZXMgPSAwOwogICAgICAgICAgICBmb3IgKGludCB4ID0gbWFyZ2luWDsgeCA8IHdpZHRoIC0gbWFyZ2luWDsgeCsrKQogICAgICAgICAgICB7CiAgICAgICAgICAgICAgICBpbnQgaSA9IHkgKiBzdHJpZGUgKyB4ICogMzsKICAgICAgICAgICAgICAgIGRvdWJsZSBsdW1hID0gMC4xMTQgKiBwaXhlbHNbaV0gKyAwLjU4NyAqIHBpeGVsc1tpICsgMV0gKyAwLjI5OSAqIHBpeGVsc1tpICsgMl07CiAgICAgICAgICAgICAgICBkb3VibGUgZGVsdGEgPSBiYWNrZ3JvdW5kIC0gbHVtYTsKICAgICAgICAgICAgICAgIGlmIChkZWx0YSA+PSA4IHx8IGx1bWEgPCAyNDIpIHNvZnRJbmsrKzsKICAgICAgICAgICAgICAgIGlmIChkZWx0YSA+PSAxOCB8fCBsdW1hIDwgMjI1KQogICAgICAgICAgICAgICAgewogICAgICAgICAgICAgICAgICAgIGluaysrOwogICAgICAgICAgICAgICAgICAgIHJvd0luaysrOwogICAgICAgICAgICAgICAgfQogICAgICAgICAgICAgICAgaWYgKGRlbHRhID49IDM1IHx8IGx1bWEgPCAxOTUpCiAgICAgICAgICAgICAgICB7CiAgICAgICAgICAgICAgICAgICAgc3Ryb25nSW5rKys7CiAgICAgICAgICAgICAgICAgICAgcm93U3Ryb25nKys7CiAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgICAgICByb3dTYW1wbGVzKys7CiAgICAgICAgICAgIH0KCiAgICAgICAgICAgIC8vIEEgZmV3IGlzb2xhdGVkIGR1c3QgcGl4ZWxzIHNob3VsZCBub3Qga2VlcCBhIHBhZ2UsIHdoaWxlIGEgcmVhbCBsaW5lIG9mCiAgICAgICAgICAgIC8vIGZhaW50L3NtYWxsIHRleHQgc2hvdWxkLiBUaGlzIGlzIGRlbGliZXJhdGVseSBiaWFzZWQgdG93YXJkIHJldGFpbmluZyBwYWdlcy4KICAgICAgICAgICAgaWYgKHJvd0luayA+PSBNYXRoLk1heCgzLCByb3dTYW1wbGVzIC8gMjUwKSkgdGV4dFJvd3MrKzsKICAgICAgICAgICAgaWYgKHJvd1N0cm9uZyA+PSBNYXRoLk1heCgyLCByb3dTYW1wbGVzIC8gMzUwKSkgc3Ryb25nUm93cysrOwogICAgICAgIH0KCiAgICAgICAgaWYgKHRleHRSb3dzID49IDMgfHwgc3Ryb25nUm93cyA+PSAyKSByZXR1cm4gZmFsc2U7CgogICAgICAgIGRvdWJsZSBzb2Z0UmF0aW8gPSAoZG91YmxlKXNvZnRJbmsgLyB0b3RhbDsKICAgICAgICBkb3VibGUgaW5rUmF0aW8gPSAoZG91YmxlKWluayAvIHRvdGFsOwogICAgICAgIGRvdWJsZSBzdHJvbmdSYXRpbyA9IChkb3VibGUpc3Ryb25nSW5rIC8gdG90YWw7CgogICAgICAgIC8vIEhpZ2hlciB0aHJlc2hvbGQgPSBzYWZlci9jb25zZXJ2YXRpdmUuIExvc2luZyBhIHBhZ2Ugd2l0aCByZWFsIHRleHQgaXMgd29yc2UKICAgICAgICAvLyB0aGFuIHJldGFpbmluZyBhbiBvY2Nhc2lvbmFsIGJsYW5rIHBhZ2UuCiAgICAgICAgaWYgKHdoaXRlbmVzc1RocmVzaG9sZCA+PSAwLjk5OTUpCiAgICAgICAgICAgIHJldHVybiBzb2Z0UmF0aW8gPCAwLjAwMDYgJiYgaW5rUmF0aW8gPCAwLjAwMDE4ICYmIHN0cm9uZ1JhdGlvIDwgMC4wMDAwNDsKICAgICAgICBpZiAod2hpdGVuZXNzVGhyZXNob2xkID49IDAuOTk4NSkKICAgICAgICAgICAgcmV0dXJuIHNvZnRSYXRpbyA8IDAuMDAxMyAmJiBpbmtSYXRpbyA8IDAuMDAwNDAgJiYgc3Ryb25nUmF0aW8gPCAwLjAwMDEwOwogICAgICAgIHJldHVybiBzb2Z0UmF0aW8gPCAwLjAwMjggJiYgaW5rUmF0aW8gPCAwLjAwMDkwICYmIHN0cm9uZ1JhdGlvIDwgMC4wMDAyNTsKICAgIH0KfQo=')
+          )
+
           # Version corrected native build.
           $projectPath = "src\ScanPrintStudio\ScanPrintStudio.csproj"
           $project = Get-Content $projectPath -Raw -Encoding UTF8
-          $project = $project.Replace("<Version>1.0.0</Version>", "<Version>1.0.5</Version>")
-          $project = $project.Replace("<FileVersion>1.0.0.0</FileVersion>", "<FileVersion>1.0.5.0</FileVersion>")
-          $project = $project.Replace("<AssemblyVersion>1.0.0.0</AssemblyVersion>", "<AssemblyVersion>1.0.5.0</AssemblyVersion>")
+          $project = $project.Replace("<Version>1.0.0</Version>", "<Version>1.0.6</Version>")
+          $project = $project.Replace("<FileVersion>1.0.0.0</FileVersion>", "<FileVersion>1.0.6.0</FileVersion>")
+          $project = $project.Replace("<AssemblyVersion>1.0.0.0</AssemblyVersion>", "<AssemblyVersion>1.0.6.0</AssemblyVersion>")
           Set-Content -Path $projectPath -Value $project -Encoding UTF8
 
           $xamlPath = "src\ScanPrintStudio\MainWindow.xaml"
           $xaml = Get-Content $xamlPath -Raw -Encoding UTF8
-          $xaml = $xaml.Replace("v1.0.0 Native", "v1.0.5 Native")
+          $xaml = $xaml.Replace("v1.0.0 Native", "v1.0.6 Native")
           Set-Content -Path $xamlPath -Value $xaml -Encoding UTF8
 
           $issPath = "Installer\ScanPrintStudio.iss"
           $iss = Get-Content $issPath -Raw -Encoding UTF8
-          $iss = $iss.Replace('#define MyAppVersion "1.0.0"', '#define MyAppVersion "1.0.5"')
-          $iss = $iss.Replace("VersionInfoVersion=1.0.0.0", "VersionInfoVersion=1.0.5.0")
+          $iss = $iss.Replace('#define MyAppVersion "1.0.0"', '#define MyAppVersion "1.0.6"')
+          $iss = $iss.Replace("VersionInfoVersion=1.0.0.0", "VersionInfoVersion=1.0.6.0")
           Set-Content -Path $issPath -Value $iss -Encoding UTF8
-
-      - name: Dump source for v1.0.6 design
-        shell: powershell
-        run: |
-          $files = @(
-            "src\ScanPrintStudio\Models\Models.cs",
-            "src\ScanPrintStudio\MainWindow.xaml.cs",
-            "src\ScanPrintStudio\MainWindow.xaml",
-            "src\ScanPrintStudio\Services\ScannerService.cs",
-            "src\ScanPrintStudio\Services\SettingsService.cs",
-            "src\ScanPrintStudio\Helpers\ImageProcessing.cs"
-          )
-          foreach ($file in $files) {
-            Write-Output "===== BEGIN $file ====="
-            if (Test-Path $file) { Get-Content $file -Encoding UTF8 }
-            else { Write-Output "MISSING" }
-            Write-Output "===== END $file ====="
-          }
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
