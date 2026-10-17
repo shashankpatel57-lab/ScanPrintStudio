@@ -63,7 +63,7 @@ jobs:
           if ($scanner -notmatch "SelectFrontOnly") { throw "WIA FRONT_ONLY hotfix missing." }
           Set-Content -Path $scannerPath -Value $scanner -Encoding UTF8
 
-          # v1.0.6: Epson DS-series duplex is routed through Epson's TWAIN/Epson Scan 2 source.
+          # v1.0.7: Epson DS-series duplex is routed through Epson's TWAIN/Epson Scan 2 source.
           # WIA Automation works for single-sided acquisition on these scanners, but some Epson
           # WIA drivers reject duplex acquisition with E_INVALIDARG. NAPS2 provides a robust
           # TWAIN bridge plus a 32-bit worker so our 64-bit app can use Epson's common 32-bit DS.
@@ -150,7 +150,7 @@ jobs:
           Set-Content -Path $projectPath -Value $project -Encoding UTF8
 
 
-          # v1.0.6: persistent image defaults, one-scan manual naming, and safer blank-page detection.
+          # v1.0.7: persistent image defaults, one-scan manual naming, and safer blank-page detection.
           $models = Get-Content $modelsPath -Raw -Encoding UTF8
           $models = $models.Replace(
             '    public string? DefaultPrinterName { get; set; }',
@@ -324,7 +324,7 @@ jobs:
             Set-Content -Path $imageProcessingPath -Value ("using System.IO;" + [Environment]::NewLine + $imageProcessingText) -Encoding UTF8
           }
 
-          # Final source cleanup / validation for v1.0.6.
+          # Final source cleanup / validation for v1.0.7.
           $main = Get-Content $mainPath -Raw -Encoding UTF8
           $duplicateBlank = ('        var blankMode = copy ? CopyBlankModeCombo : ScanBlankModeCombo;' + [Environment]::NewLine) * 2
           $singleBlank = '        var blankMode = copy ? CopyBlankModeCombo : ScanBlankModeCombo;' + [Environment]::NewLine
@@ -351,23 +351,72 @@ jobs:
           if ($main -notmatch 'private void ScanOverrideNameText_TextChanged') { throw "Manual filename event handlers were not generated." }
           Set-Content -Path $mainPath -Value $main -Encoding UTF8
 
+          # v1.0.7: make the one-scan manual filename override authoritative for every profile type.
+          $main = Get-Content $mainPath -Raw -Encoding UTF8
+
+          $buildNamePattern = '(?s)    private string BuildBaseName\(FilingProfile profile\)\s*\{.*?\n    \}\s*\n\s*    private void ScanProfileCombo_SelectionChanged'
+          $buildNameReplacement = @(
+            '    private string BuildBaseName(FilingProfile profile)',
+            '    {',
+            '        string manualOverride = ScanOverrideNameText.Text.Trim();',
+            '        if (!string.IsNullOrWhiteSpace(manualOverride))',
+            '            return manualOverride;',
+            '',
+            '        return profile.NamingMode switch',
+            '        {',
+            '            NamingMode.Incremental => $"{profile.Prefix} {profile.NextNumber}".Trim(),',
+            '            NamingMode.Selection => Convert.ToString(ScanNameOptionCombo.SelectedItem) ?? "",',
+            '            _ => string.IsNullOrWhiteSpace(ScanManualNameText.Text) ? profile.Prefix : ScanManualNameText.Text.Trim()',
+            '        };',
+            '    }',
+            '',
+            '    private void ScanProfileCombo_SelectionChanged'
+          ) -join [Environment]::NewLine
+          if ($main -notmatch $buildNamePattern) { throw "Could not locate BuildBaseName for manual override patch." }
+          $main = [regex]::Replace($main, $buildNamePattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $buildNameReplacement }, 1)
+
+          $incrementPattern = '(?s)            if \(profile\.NamingMode == NamingMode\.Incremental\)\s*\{\s*profile\.NextNumber\+\+;\s*_settingsService\.Save\(\);\s*ScanProfileCombo_SelectionChanged\(null!, null!\);\s*\}'
+          $incrementReplacement = @(
+            '            bool usedManualOverride = !string.IsNullOrWhiteSpace(ScanOverrideNameText.Text);',
+            '            if (profile.NamingMode == NamingMode.Incremental && !usedManualOverride)',
+            '            {',
+            '                profile.NextNumber++;',
+            '                _settingsService.Save();',
+            '                ScanProfileCombo_SelectionChanged(null!, null!);',
+            '            }',
+            '            if (usedManualOverride)',
+            '            {',
+            '                ScanOverrideNameText.Clear();',
+            '                UpdateScanFilenamePreview();',
+            '            }'
+          ) -join [Environment]::NewLine
+          if ($main -match $incrementPattern) {
+            $main = [regex]::Replace($main, $incrementPattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $incrementReplacement }, 1)
+          }
+          elseif ($main -notmatch 'usedManualOverride') {
+            throw "Could not locate incremental naming block for manual override counter protection."
+          }
+
+          if ($main -notmatch 'string manualOverride = ScanOverrideNameText\.Text\.Trim\(\);') { throw "Manual filename override was not wired into BuildBaseName." }
+          Set-Content -Path $mainPath -Value $main -Encoding UTF8
+
           # Version corrected native build.
           $projectPath = "src\ScanPrintStudio\ScanPrintStudio.csproj"
           $project = Get-Content $projectPath -Raw -Encoding UTF8
-          $project = $project.Replace("<Version>1.0.0</Version>", "<Version>1.0.6</Version>")
-          $project = $project.Replace("<FileVersion>1.0.0.0</FileVersion>", "<FileVersion>1.0.6.0</FileVersion>")
-          $project = $project.Replace("<AssemblyVersion>1.0.0.0</AssemblyVersion>", "<AssemblyVersion>1.0.6.0</AssemblyVersion>")
+          $project = $project.Replace("<Version>1.0.0</Version>", "<Version>1.0.7</Version>")
+          $project = $project.Replace("<FileVersion>1.0.0.0</FileVersion>", "<FileVersion>1.0.7.0</FileVersion>")
+          $project = $project.Replace("<AssemblyVersion>1.0.0.0</AssemblyVersion>", "<AssemblyVersion>1.0.7.0</AssemblyVersion>")
           Set-Content -Path $projectPath -Value $project -Encoding UTF8
 
           $xamlPath = "src\ScanPrintStudio\MainWindow.xaml"
           $xaml = Get-Content $xamlPath -Raw -Encoding UTF8
-          $xaml = $xaml.Replace("v1.0.0 Native", "v1.0.6 Native")
+          $xaml = $xaml.Replace("v1.0.0 Native", "v1.0.7 Native")
           Set-Content -Path $xamlPath -Value $xaml -Encoding UTF8
 
           $issPath = "Installer\ScanPrintStudio.iss"
           $iss = Get-Content $issPath -Raw -Encoding UTF8
-          $iss = $iss.Replace('#define MyAppVersion "1.0.0"', '#define MyAppVersion "1.0.6"')
-          $iss = $iss.Replace("VersionInfoVersion=1.0.0.0", "VersionInfoVersion=1.0.6.0")
+          $iss = $iss.Replace('#define MyAppVersion "1.0.0"', '#define MyAppVersion "1.0.7"')
+          $iss = $iss.Replace("VersionInfoVersion=1.0.0.0", "VersionInfoVersion=1.0.7.0")
           Set-Content -Path $issPath -Value $iss -Encoding UTF8
 
       - name: Setup .NET 8
