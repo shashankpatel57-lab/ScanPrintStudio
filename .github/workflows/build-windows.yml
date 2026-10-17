@@ -152,6 +152,24 @@ jobs:
           $iss = $iss.Replace("VersionInfoVersion=1.0.0.0", "VersionInfoVersion=1.0.5.0")
           Set-Content -Path $issPath -Value $iss -Encoding UTF8
 
+      - name: Dump source for v1.0.6 design
+        shell: powershell
+        run: |
+          $files = @(
+            "src\ScanPrintStudio\Models\Models.cs",
+            "src\ScanPrintStudio\MainWindow.xaml.cs",
+            "src\ScanPrintStudio\MainWindow.xaml",
+            "src\ScanPrintStudio\Services\ScannerService.cs",
+            "src\ScanPrintStudio\Services\SettingsService.cs",
+            "src\ScanPrintStudio\Helpers\ImageProcessing.cs"
+          )
+          foreach ($file in $files) {
+            Write-Output "===== BEGIN $file ====="
+            if (Test-Path $file) { Get-Content $file -Encoding UTF8 }
+            else { Write-Output "MISSING" }
+            Write-Output "===== END $file ====="
+          }
+
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
